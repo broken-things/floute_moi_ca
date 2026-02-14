@@ -2,11 +2,11 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:google_mlkit_object_detection/google_mlkit_object_detection.dart';
 import 'package:image/image.dart' as img;
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import 'package:gal/gal.dart';
+import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 
 void main() {
   runApp(
@@ -25,85 +25,92 @@ class PlateBlurrerApp extends StatefulWidget {
 }
 
 class _PlateBlurrerAppState extends State<PlateBlurrerApp> {
-  File? _displayImage;
-  bool _isProcessing = false;
+  File? _displayImage; // L'image finale à afficher
+  bool _isProcessing = false; // État du chargement
   final ImagePicker _picker = ImagePicker();
-  late ObjectDetector _objectDetector;
+
+  // Instance du moteur de reconnaissance de texte (Latin pour l'Europe/USA)
+  late TextRecognizer _textRecognizer;
 
   @override
   void initState() {
     super.initState();
-    // Initialisation de la détection d'objets (Local)
-    final options = ObjectDetectorOptions(
-      mode: DetectionMode.single,
-      classifyObjects: true,
-      multipleObjects: true,
-    );
-    _objectDetector = ObjectDetector(options: options);
+    _textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
   }
 
-  // Fonction pour traiter l'image
+  /// Fonction principale : Sélectionne, Analyse et Floute l'image
   Future<void> _pickAndProcessImage() async {
+    // 1. Sélection de l'image
     final XFile? pickedFile = await _picker.pickImage(
       source: ImageSource.gallery,
+      maxWidth: 10000,
+      maxHeight: 10000,
+      imageQuality: 100,
     );
 
     if (pickedFile == null) return;
 
-    setState(() {
-      _isProcessing = true;
-    });
+    setState(() => _isProcessing = true);
 
-    // Détection des plaques (ML Kit)
+    // Préparation de l'image pour l'IA
     final inputImage = InputImage.fromFilePath(pickedFile.path);
-    final List<DetectedObject> objects = await _objectDetector.processImage(
-      inputImage,
-    );
 
-    // Chargement des pixels
+    // Détection des blocs de texte
+    final recognizedText = await _textRecognizer.processImage(inputImage);
+
+    // Chargement des données "img.Image" pour modification
     final bytes = await pickedFile.readAsBytes();
     img.Image? originalImage = img.decodeImage(bytes);
 
     if (originalImage != null) {
-      // Application du flou sur chaque zone contenant la plaque
-      for (var obj in objects) {
-        final rect = obj.boundingBox;
+      // Parcours des zones de texte détectées
+      for (var block in recognizedText.blocks) {
+        for (var line in block.lines) {
+          final rect = line.boundingBox;
 
-        int x = rect.left.toInt().clamp(0, originalImage.width);
-        int y = rect.top.toInt().clamp(0, originalImage.height);
-        int w = rect.width.toInt().clamp(0, originalImage.width - x);
-        int h = rect.height.toInt().clamp(0, originalImage.height - y);
+          // Filtre de sécurité : floutage des formes similaires aux plaques
+          // Ratio Largeur / Hauteur > 1.2
+          if (rect.width > rect.height * 1.2) {
+            // Calcul des coordonnées sécurisées (ne pas sortir de l'image)
+            int x = rect.left.toInt().clamp(0, originalImage.width);
+            int y = rect.top.toInt().clamp(0, originalImage.height);
+            int w = rect.width.toInt().clamp(0, originalImage.width - x);
+            int h = rect.height.toInt().clamp(0, originalImage.height - y);
 
-        if (w > 0 && h > 0) {
-          img.Image part = img.copyCrop(
-            originalImage,
-            x: x,
-            y: y,
-            width: w,
-            height: h,
-          );
-          img.Image blurredPart = img.gaussianBlur(part, radius: 25);
-          img.compositeImage(originalImage, blurredPart, dstX: x, dstY: y);
+            if (w > 0 && h > 0) {
+              // Découpe la zone de la plaque
+              img.Image part = img.copyCrop(
+                originalImage,
+                x: x,
+                y: y,
+                width: w,
+                height: h,
+              );
+
+              // Applique le flou Gaussien (puissance 40 pour la HD)
+              img.Image blurredPart = img.gaussianBlur(part, radius: 40);
+
+              // Fusionne la zone floutée sur l'image d'origine
+              img.compositeImage(originalImage, blurredPart, dstX: x, dstY: y);
+            }
+          }
         }
       }
 
-      // Conservation du format d'origine
+      // Encodage final
       String extension = p.extension(pickedFile.path).toLowerCase();
       Uint8List encodedBytes;
 
       if (extension == '.png') {
         encodedBytes = Uint8List.fromList(img.encodePng(originalImage));
-      } else if (extension == '.jpg' || extension == '.jpeg') {
+      } else {
+        // Par défaut en JPG qualité maximale pour le reste
         encodedBytes = Uint8List.fromList(
           img.encodeJpg(originalImage, quality: 100),
         );
-      } else {
-        // Pour les autres formats (RAW, etc.), on exporte en PNG haute qualité
-        extension = '.png';
-        encodedBytes = Uint8List.fromList(img.encodePng(originalImage));
       }
 
-      // 5. Sauvegarde temporaire pour l'affichage
+      // Enregistrement dans un fichier temporaire pour l'aperçu UI
       final tempDir = await getTemporaryDirectory();
       final blurredFile = File('${tempDir.path}/resultat$extension');
       await blurredFile.writeAsBytes(encodedBytes);
@@ -115,16 +122,15 @@ class _PlateBlurrerAppState extends State<PlateBlurrerApp> {
     }
   }
 
-  // Sauvegarde finale dans la galerie publique du téléphone
+  /// Sauvegarde l'image traitée dans la galerie photo du téléphone
   Future<void> _saveToGallery() async {
     if (_displayImage == null) return;
-
     try {
       await Gal.putImage(_displayImage!.path);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text("Image enregistrée dans la galerie !"),
+            content: Text("Sauvegardé !"),
             backgroundColor: Colors.green,
           ),
         );
@@ -133,7 +139,7 @@ class _PlateBlurrerAppState extends State<PlateBlurrerApp> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text("Erreur lors de l'enregistrement"),
+            content: Text("Erreur de sauvegarde"),
             backgroundColor: Colors.red,
           ),
         );
@@ -147,7 +153,7 @@ class _PlateBlurrerAppState extends State<PlateBlurrerApp> {
       backgroundColor: const Color(0xFFF2F2F7),
       appBar: AppBar(
         title: const Text(
-          'Floute moi ç',
+          'Floute moi ça',
           style: TextStyle(color: Colors.black),
         ),
         centerTitle: true,
@@ -160,8 +166,8 @@ class _PlateBlurrerAppState extends State<PlateBlurrerApp> {
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   CircularProgressIndicator(),
-                  SizedBox(height: 10),
-                  Text("Analyse locale en cours..."),
+                  SizedBox(height: 15),
+                  Text("Analyse en cours..."),
                 ],
               )
             : _displayImage == null
@@ -171,6 +177,9 @@ class _PlateBlurrerAppState extends State<PlateBlurrerApp> {
     );
   }
 
+  // --- COMPOSANTS INTERFACE (UI) ---
+
+  // Écran d'accueil avec bouton d'importation
   Widget _buildUploadUI() {
     return GestureDetector(
       onTap: _pickAndProcessImage,
@@ -181,21 +190,21 @@ class _PlateBlurrerAppState extends State<PlateBlurrerApp> {
           borderRadius: BorderRadius.circular(30),
           boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 10)],
         ),
-        child: Column(
+        child: const Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(
-              Icons.cloud_upload_outlined,
+              Icons.add_photo_alternate_rounded,
               size: 80,
               color: Colors.blueAccent,
             ),
-            const SizedBox(height: 20),
-            const Text(
-              "Cliquez pour choisir une photo",
+            SizedBox(height: 20),
+            Text(
+              "Importer une photo",
               style: TextStyle(fontWeight: FontWeight.bold),
             ),
-            const Text(
-              "Traitement 100% privé et local",
+            Text(
+              "Traitement local & sécurisé",
               style: TextStyle(fontSize: 12, color: Colors.grey),
             ),
           ],
@@ -204,6 +213,7 @@ class _PlateBlurrerAppState extends State<PlateBlurrerApp> {
     );
   }
 
+  // Écran de résultat avec affichage et boutons d'actions
   Widget _buildResultUI() {
     return Column(
       children: [
@@ -217,7 +227,7 @@ class _PlateBlurrerAppState extends State<PlateBlurrerApp> {
           ),
         ),
         Container(
-          padding: const EdgeInsets.all(20),
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 30),
           decoration: const BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
@@ -228,17 +238,17 @@ class _PlateBlurrerAppState extends State<PlateBlurrerApp> {
               TextButton.icon(
                 onPressed: _pickAndProcessImage,
                 icon: const Icon(Icons.refresh),
-                label: const Text("Autre photo"),
+                label: const Text("Nouveau floutage"),
               ),
               ElevatedButton.icon(
                 onPressed: _saveToGallery,
-                icon: const Icon(Icons.download),
+                icon: const Icon(Icons.download_done_rounded),
                 label: const Text("Enregistrer"),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.blueAccent,
                   foregroundColor: Colors.white,
                   padding: const EdgeInsets.symmetric(
-                    horizontal: 20,
+                    horizontal: 25,
                     vertical: 12,
                   ),
                 ),
@@ -252,7 +262,7 @@ class _PlateBlurrerAppState extends State<PlateBlurrerApp> {
 
   @override
   void dispose() {
-    _objectDetector.close();
+    _textRecognizer.close(); // Libère la mémoire de l'IA à la fermeture
     super.dispose();
   }
 }
