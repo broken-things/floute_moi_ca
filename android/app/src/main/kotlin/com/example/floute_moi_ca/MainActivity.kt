@@ -1,4 +1,4 @@
-package com.example.floute_moi_ca
+package com.example.floutage_plaque
 
 import io.flutter.embedding.android.FlutterActivity
 

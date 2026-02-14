@@ -6,7 +6,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.floute_moi_ca"
+    namespace = "com.example.floutage_plaque"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = "29.0.13599879" // <-- fixed
 
@@ -20,7 +20,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.example.floute_moi_ca"
+        applicationId = "com.example.floutage_plaque"
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
