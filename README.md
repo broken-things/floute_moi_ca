@@ -2,7 +2,6 @@
 
 **Floutage 2 plaque** est une application Flutter conçue pour répondre à une problématique personnelle : flouter les plaques d'immatriculation efficacement tout en garantissant la confidentialité des données.
 
----
 
 ## Points Forts
 
@@ -11,7 +10,7 @@
 * **Haute Fidélité :** Conserve le format d'origine (JPG, PNG) et la résolution initiale.
 * **Interface Intuitive** 
 
----
+
 
 ## Stack Technique
 
@@ -20,8 +19,6 @@
 * **Moteur d'Image :** `image` (Traitement des pixels et flou Gaussien)
 * **Gestion de Fichiers :** `path_provider` & `gal` (Sauvegarde en galerie publique)
 * **Compilation :** Gradle (Kotlin DSL) avec règles R8/ProGuard.
-
----
 
 ## Fonctionnement Technique
 
